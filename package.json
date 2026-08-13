@@ -1,0 +1,44 @@
+{
+  "name": "@rymel/formula-engine",
+  "version": "1.0.0",
+  "description": "Motor de fórmulas de hoja de cálculo de Rymel: evaluación determinista, idéntica en navegador y en Node.",
+  "license": "UNLICENSED",
+  "private": false,
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "npm run clean && npm run build:esm && npm run build:cjs && node scripts/write-module-type.mjs",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "check:deps": "node scripts/check-dependencies.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify": "npm run check:deps && npm run typecheck && npm run test && npm run build",
+    "prepare": "npm run build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.10"
+  }
+}
