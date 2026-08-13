@@ -12,6 +12,19 @@
 
 import { expandRange, isRangeRef } from "./cellRef.js";
 import { callFunction, type FormulaArg, type FormulaValue } from "./functions.js";
+import type {
+  CustomFunctionCall,
+  CustomFunctionRegistry,
+  CustomFunctionResult,
+} from "./customFunctions.js";
+import {
+  isQualifiedRef,
+  normalizeRef,
+  parseQualifiedRef,
+  QUALIFIED_REF_SOURCE,
+  qualify,
+  splitRef,
+} from "./sheetRef.js";
 
 export type CellValueMap = Record<string, FormulaValue | undefined>;
 
@@ -19,9 +32,57 @@ export type CellValueMap = Record<string, FormulaValue | undefined>;
 export const FORMULA_ERROR = "#ERROR";
 /** Value shown for a cell that is part of a circular reference (see depGraph.ts). */
 export const FORMULA_CIRCULAR = "#CIRCULAR";
+/** Value shown for a cell whose custom-function arguments don't match the declaration. */
+export const FORMULA_BAD_ARGS = "#ARGS";
 
 /** Thrown for any malformed input; the public API turns this into `#ERROR`. */
 class ParseError extends Error {}
+
+/** Thrown when a custom function is invoked with the wrong number of arguments. */
+class ArityError extends Error {}
+
+/**
+ * Marca interna para un valor que todavía no se puede calcular porque
+ * depende de una función personalizada sin resolver. Se propaga por los
+ * operadores en vez de fallar: la celda se reevalúa entera cuando el lote
+ * de invocaciones vuelve resuelto.
+ */
+const UNRESOLVED = Symbol("unresolved");
+type StackValue = FormulaArg | typeof UNRESOLVED;
+
+const isUnresolved = (value: StackValue): value is typeof UNRESOLVED =>
+  value === UNRESOLVED;
+
+/** Invocación de función personalizada pendiente de resolver. */
+export interface PendingCustomCall {
+  /** Posición de la invocación dentro de la fórmula, contando solo las personalizadas. */
+  occurrence: number;
+  call: CustomFunctionCall;
+}
+
+/** Contexto opcional de evaluación: hoja actual y funciones personalizadas. */
+export interface EvaluateContext {
+  /** Hoja a la que pertenece la fórmula; califica sus referencias locales. */
+  sheet?: string;
+  /** Funciones personalizadas reconocibles en la fórmula. */
+  customFunctions?: CustomFunctionRegistry;
+  /** Resultados ya resueltos, por posición de aparición. */
+  customResults?: ReadonlyMap<number, CustomFunctionResult>;
+  /**
+   * Hojas que existen en el libro. Cuando se indica, una referencia a una
+   * hoja ausente es un error en vez de un cero.
+   *
+   * Una celda vacía vale cero, pero una hoja que no existe es una fórmula
+   * equivocada, y conviene que se note. Si no se indica el conjunto, no hay
+   * forma de distinguir ambos casos y se mantiene el cero.
+   */
+  knownSheets?: ReadonlySet<string>;
+}
+
+/** Resultado de evaluar una celda: un valor, o invocaciones por resolver. */
+export type CellEvaluation =
+  | { status: "ok"; value: FormulaValue }
+  | { status: "pending"; calls: PendingCustomCall[] };
 
 type Token =
   | { type: "number"; value: number }
@@ -34,8 +95,35 @@ type Token =
   | { type: "rparen" }
   | { type: "comma" };
 
-const TOKEN_PATTERN =
-  /\s+|"(?:[^"\\]|\\.)*"|\$?[A-Za-z]+\$?\d+:\$?[A-Za-z]+\$?\d+|\$?[A-Za-z]+\$?\d+|[A-Za-z_][A-Za-z0-9_]*(?=\()|\d+(?:\.\d+)?|<=|>=|<>|[+\-*/^&=<>(),]/g;
+/**
+ * Las alternativas se prueban en orden, y ese orden importa:
+ *
+ * - El literal de texto va antes que todo lo demás, de modo que un
+ *   `="El COST(total) es:"` sea texto y no una invocación de función.
+ * - La referencia calificada por hoja va antes que la simple, para que
+ *   `Hoja1!A1` no se parta en el identificador `Hoja1` y la referencia `A1`.
+ * - El identificador de función solo se reconoce si le sigue un paréntesis,
+ *   y captura el nombre completo. Por eso `ASSOCIATE_COST(` nunca puede
+ *   leerse como `COST(`: un tokenizador no parte identificadores por la
+ *   mitad, que es justo el defecto del resolutor por expresión regular al
+ *   que este motor sustituye.
+ */
+const TOKEN_PATTERN = new RegExp(
+  [
+    "\\s+",
+    '"(?:[^"\\\\]|\\\\.)*"',
+    QUALIFIED_REF_SOURCE,
+    "\\$?[A-Za-z]+\\$?\\d+:\\$?[A-Za-z]+\\$?\\d+",
+    "\\$?[A-Za-z]+\\$?\\d+",
+    "[A-Za-z_][A-Za-z0-9_]*(?=\\()",
+    "\\d+(?:\\.\\d+)?",
+    "<=",
+    ">=",
+    "<>",
+    "[+\\-*/^&=<>(),]",
+  ].join("|"),
+  "g",
+);
 
 const unescapeString = (literal: string): string =>
   literal
@@ -65,6 +153,13 @@ const tokenize = (expression: string): Token[] => {
     if (/^\s+$/.test(text)) continue;
     if (text.startsWith('"')) {
       tokens.push({ type: "string", value: unescapeString(text) });
+    } else if (isQualifiedRef(text)) {
+      const qualified = parseQualifiedRef(text)!;
+      const canonical = qualify(qualified.sheet, qualified.cell);
+      tokens.push({
+        type: qualified.cell.includes(":") ? "range" : "ref",
+        value: canonical,
+      });
     } else if (isRangeRef(stripAbsoluteMarkers(text))) {
       tokens.push({ type: "range", value: stripAbsoluteMarkers(text) });
     } else if (/^\$?[A-Za-z]+\$?\d+$/.test(text)) {
@@ -233,9 +328,35 @@ const toRPN = (tokens: Token[]): RPNToken[] => {
   return output;
 };
 
-const resolveRef = (ref: string, cellValues: CellValueMap): FormulaValue => {
-  const value = cellValues[ref];
+const resolveRef = (
+  ref: string,
+  cellValues: CellValueMap,
+  context: EvaluateContext,
+): FormulaValue => {
+  const isQualified = ref.includes("!");
+  const canonical = normalizeRef(ref, isQualified ? undefined : context.sheet);
+
+  if (isQualified && context.knownSheets !== undefined) {
+    const { sheet } = splitRef(canonical);
+    if (sheet !== undefined && !context.knownSheets.has(sheet)) {
+      throw new ParseError(`La hoja "${sheet}" no existe`);
+    }
+  }
+
+  const value = cellValues[canonical];
   return value === undefined || value === null || value === "" ? 0 : value;
+};
+
+/**
+ * Expande un rango a sus celdas, conservando el calificador de hoja cuando
+ * lo lleva: `Hoja1!A1:B2` produce `Hoja1!A1`, `Hoja1!B1`, ...
+ */
+const expandAnyRange = (range: string): string[] => {
+  const separator = range.lastIndexOf("!");
+  if (separator === -1) return expandRange(range);
+
+  const sheet = range.slice(0, separator);
+  return expandRange(range.slice(separator + 1)).map((ref) => qualify(sheet, ref));
 };
 
 const toNumber = (value: FormulaValue): number => {
@@ -298,9 +419,22 @@ const applyBinaryOp = (
   }
 };
 
-/** Evaluates a Reverse Polish Notation token list against `cellValues`. */
-const evalRPN = (rpn: RPNToken[], cellValues: CellValueMap): FormulaValue => {
-  const stack: FormulaArg[] = [];
+/**
+ * Evaluates a Reverse Polish Notation token list against `cellValues`.
+ *
+ * Cuando la fórmula invoca funciones personalizadas todavía sin resolver,
+ * las acumula en `pending` y devuelve `UNRESOLVED`: el orquestador resuelve
+ * el lote y vuelve a llamar con los resultados disponibles.
+ */
+const evalRPN = (
+  rpn: RPNToken[],
+  cellValues: CellValueMap,
+  context: EvaluateContext,
+  pending: PendingCustomCall[],
+): StackValue => {
+  const stack: StackValue[] = [];
+  const customFunctions = context.customFunctions;
+  let occurrence = 0;
 
   for (const token of rpn) {
     switch (token.type) {
@@ -308,15 +442,23 @@ const evalRPN = (rpn: RPNToken[], cellValues: CellValueMap): FormulaValue => {
         stack.push(token.value);
         break;
       case "ref":
-        stack.push(resolveRef(token.value, cellValues));
+        stack.push(resolveRef(token.value, cellValues, context));
         break;
       case "range":
-        stack.push(expandRange(token.value).map((ref) => resolveRef(ref, cellValues)));
+        stack.push(
+          expandAnyRange(token.value).map((ref) =>
+            resolveRef(ref, cellValues, context),
+          ),
+        );
         break;
       case "unaryMinus": {
         const operand = stack.pop();
         if (operand === undefined || Array.isArray(operand)) {
           throw new ParseError("Malformed expression");
+        }
+        if (isUnresolved(operand)) {
+          stack.push(UNRESOLVED);
+          break;
         }
         stack.push(-toNumber(operand));
         break;
@@ -327,6 +469,10 @@ const evalRPN = (rpn: RPNToken[], cellValues: CellValueMap): FormulaValue => {
         if (a === undefined || b === undefined || Array.isArray(a) || Array.isArray(b)) {
           throw new ParseError("Malformed expression");
         }
+        if (isUnresolved(a) || isUnresolved(b)) {
+          stack.push(UNRESOLVED);
+          break;
+        }
         stack.push(applyBinaryOp(token.op, a, b));
         break;
       }
@@ -335,7 +481,20 @@ const evalRPN = (rpn: RPNToken[], cellValues: CellValueMap): FormulaValue => {
           throw new ParseError(`Not enough arguments for ${token.name}`);
         }
         const args = stack.splice(stack.length - token.argCount, token.argCount);
-        stack.push(callFunction(token.name, args));
+
+        const definition = customFunctions?.get(token.name);
+        if (definition) {
+          stack.push(
+            resolveCustomCall(definition, args, occurrence++, context, pending),
+          );
+          break;
+        }
+
+        if (args.some(isUnresolved)) {
+          stack.push(UNRESOLVED);
+          break;
+        }
+        stack.push(callFunction(token.name, args as FormulaArg[]));
         break;
       }
     }
@@ -348,20 +507,91 @@ const evalRPN = (rpn: RPNToken[], cellValues: CellValueMap): FormulaValue => {
 };
 
 /**
+ * Resuelve una invocación de función personalizada, o la deja pendiente.
+ *
+ * La comprobación de aridad es lo primero y ocurre siempre: una invocación
+ * con el número de argumentos equivocado es un error de la hoja, y no tiene
+ * sentido gastar una petición de red en descubrirlo.
+ */
+const resolveCustomCall = (
+  definition: { code: string; variables: string[] },
+  args: StackValue[],
+  occurrence: number,
+  context: EvaluateContext,
+  pending: PendingCustomCall[],
+): StackValue => {
+  if (args.length !== definition.variables.length) {
+    throw new ArityError(
+      `${definition.code} espera ${definition.variables.length} argumento(s) y recibió ${args.length}`,
+    );
+  }
+
+  const alreadyResolved = context.customResults?.get(occurrence);
+  if (alreadyResolved) {
+    if (alreadyResolved.error !== undefined) {
+      throw new ParseError(alreadyResolved.error);
+    }
+    return alreadyResolved.value ?? 0;
+  }
+
+  // Un argumento sin resolver significa una función personalizada anidada:
+  // se resolverá en la siguiente vuelta, cuando su valor ya exista.
+  if (args.some((arg) => isUnresolved(arg) || Array.isArray(arg))) {
+    return UNRESOLVED;
+  }
+
+  const parameters: Record<string, number> = {};
+  definition.variables.forEach((variable, index) => {
+    parameters[variable] = toNumber(args[index] as FormulaValue);
+  });
+
+  pending.push({ occurrence, call: { definition, parameters } });
+  return UNRESOLVED;
+};
+
+/**
  * Evaluates the expression after the leading `=` (i.e. `P3/O3`, not
  * `=P3/O3`) against `cellValues`. Returns `#ERROR` instead of throwing.
  */
 export const evaluateExpression = (
   expression: string,
   cellValues: CellValueMap,
+  context: EvaluateContext = {},
 ): FormulaValue => {
+  const result = evaluateExpressionDetailed(expression, cellValues, context);
+  // Sin orquestador que resuelva el lote, una función personalizada sin
+  // resolver no puede dar un valor: la celda queda en error.
+  return result.status === "ok" ? result.value : FORMULA_ERROR;
+};
+
+/**
+ * Igual que `evaluateExpression`, pero distingue entre un valor y una
+ * fórmula que espera la resolución de funciones personalizadas.
+ */
+export const evaluateExpressionDetailed = (
+  expression: string,
+  cellValues: CellValueMap,
+  context: EvaluateContext = {},
+): CellEvaluation => {
+  const pending: PendingCustomCall[] = [];
   try {
     const tokens = tokenize(expression);
     if (tokens.length === 0) throw new ParseError("Empty expression");
-    const rpn = toRPN(tokens);
-    return evalRPN(rpn, cellValues);
-  } catch {
-    return FORMULA_ERROR;
+    const value = evalRPN(toRPN(tokens), cellValues, context, pending);
+
+    if (isUnresolved(value)) {
+      // Sin invocaciones que resolver, un valor sin resolver solo puede
+      // venir de una fórmula malformada.
+      if (pending.length === 0) return { status: "ok", value: FORMULA_ERROR };
+      return { status: "pending", calls: pending };
+    }
+    if (Array.isArray(value)) return { status: "ok", value: FORMULA_ERROR };
+    return { status: "ok", value };
+  } catch (error) {
+    return {
+      status: "ok",
+      value: error instanceof ArityError ? FORMULA_BAD_ARGS : FORMULA_ERROR,
+    };
   }
 };
 
@@ -372,13 +602,27 @@ export const evaluateExpression = (
 export const evaluateFormula = (
   formula: string | undefined | null,
   cellValues: CellValueMap,
+  context: EvaluateContext = {},
 ): FormulaValue => {
-  if (formula === undefined || formula === null) return "";
+  const result = evaluateCell(formula, cellValues, context);
+  return result.status === "ok" ? result.value : FORMULA_ERROR;
+};
+
+/**
+ * Igual que `evaluateFormula`, pero informa si la celda quedó a la espera de
+ * resolver funciones personalizadas. Lo usa `evaluateSheet`.
+ */
+export const evaluateCell = (
+  formula: string | undefined | null,
+  cellValues: CellValueMap,
+  context: EvaluateContext = {},
+): CellEvaluation => {
+  if (formula === undefined || formula === null) return { status: "ok", value: "" };
   const trimmed = String(formula).trim();
-  if (trimmed === "") return "";
+  if (trimmed === "") return { status: "ok", value: "" };
   if (!trimmed.startsWith("=")) {
     const num = Number(trimmed);
-    return Number.isNaN(num) ? trimmed : num;
+    return { status: "ok", value: Number.isNaN(num) ? trimmed : num };
   }
-  return evaluateExpression(trimmed.slice(1), cellValues);
+  return evaluateExpressionDetailed(trimmed.slice(1), cellValues, context);
 };

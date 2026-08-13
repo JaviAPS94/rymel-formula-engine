@@ -44,6 +44,63 @@ for (const ref of order) {
 // values.B1 === 30
 ```
 
+## Referencias entre hojas
+
+Las celdas de un libro se indexan por su referencia canónica: `A1` en un libro
+de una sola hoja, `Hoja1!A1` cuando hay varias. Dentro de una fórmula, una
+referencia sin calificar pertenece a la hoja de la celda que la contiene.
+
+```ts
+const cells = {
+  "Template 1F!A11": { formula: "5" },
+  "Hoja2!B2": { formula: "='Template 1F'!A11 * 2" },  // 10
+  "Hoja2!B3": { formula: "=B2 + 1" },                 // 11, B2 es de Hoja2
+};
+```
+
+Los nombres con espacios van entre comillas simples. Referenciar una hoja que
+no existe da error, no cero: una celda vacía vale cero, pero una hoja ausente
+es una fórmula equivocada y conviene que se note.
+
+## Funciones personalizadas
+
+Las fórmulas de diseño se invocan desde una celda como `=CUBIC(A1, B2)`. El
+motor no sabe evaluarlas — la expresión está cifrada y solo el motor cifrado
+puede resolverla — así que las reconoce, ordena y **agrupa**, y delega la
+resolución en un puerto que inyecta el consumidor.
+
+```ts
+const result = await evaluateSheet(cells, {
+  customFunctions: [{ id: 10, code: "QUADRATIC", variables: ["x"] }],
+  resolveCustomFunctions: async (calls) => {
+    // calls: [{ definition, parameters: { x: 5 } }, ...] — un lote completo
+    const response = await api.post("/design-functions/calculate", {
+      functions: calls.map((c) => ({
+        designFunctionId: c.definition.id,
+        parameters: c.parameters,
+      })),
+    });
+    return response.results.map((r) => ({ value: r.result }));
+  },
+});
+```
+
+Tres propiedades que importan:
+
+- **Un lote por nivel de dependencia, no una llamada por celda.** Una hoja con
+  cuarenta celdas independientes que llaman a `QUADRATIC` hace *una* petición.
+  `result.batchCount` dice cuántas hubo.
+- **Los argumentos van por posición**, contra `variables` en su orden
+  declarado. Si la cantidad no coincide, la celda da `#ARGS` y no se gasta
+  una petición en descubrirlo.
+- **Un código no puede capturar dentro de otro.** `=ASSOCIATE_COST(A1,B2)`
+  resuelve `ASSOCIATE_COST`, nunca `COST`, porque el tokenizador reconoce el
+  identificador completo. `findCollidingCodes` señala los códigos que harían
+  ambigua esa resolución, para que el catálogo los rechace de entrada.
+
+Si el puerto falla, el error queda acotado a las celdas de ese lote; las que
+ya se calcularon conservan su valor.
+
 ## Funciones incorporadas
 
 Cada una responde a su nombre en español (el que se escribe en las plantillas)
@@ -76,7 +133,7 @@ npm test
 Se instala fijado a un tag inmutable:
 
 ```json
-"@rymel/formula-engine": "github:JaviAPS94/rymel-formula-engine#v1.0.0"
+"@rymel/formula-engine": "github:JaviAPS94/rymel-formula-engine#v1.1.0"
 ```
 
 Ningún consumidor apunta a `main`: una publicación no debe cambiarle el

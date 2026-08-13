@@ -1,4 +1,7 @@
 export * from "./cellRef.js";
+export * from "./sheetRef.js";
 export * from "./depGraph.js";
 export * from "./functions.js";
+export * from "./customFunctions.js";
 export * from "./evaluate.js";
+export * from "./evaluateSheet.js";

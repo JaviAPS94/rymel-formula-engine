@@ -12,6 +12,14 @@
  * engine's cross-sheet requirement.
  */
 
+import { expandRange } from "./cellRef.js";
+import {
+  parseQualifiedRef,
+  QUALIFIED_REF_SOURCE,
+  qualify,
+  splitRef,
+} from "./sheetRef.js";
+
 /** Matches a single cell reference: `A1`, `$A$1` */
 const CELL_REF_REGEX = /\$?[A-Z]+\$?\d+/g;
 
@@ -42,12 +50,38 @@ const columnIndexToLabel = (col: number): string => {
  * expanding ranges into individual cells. Returns normalized refs like
  * `A1`, with `$` stripped.
  */
-export const extractPrecedents = (formula: string): Set<string> => {
+export const extractPrecedents = (
+  formula: string,
+  currentSheet?: string,
+): Set<string> => {
   if (!formula || !formula.startsWith("=")) return new Set();
 
   const refs = new Set<string>();
-  const expr = formula.slice(1);
+  let expr = formula.slice(1);
 
+  // Los literales de texto se retiran antes de buscar referencias: lo que
+  // hay dentro de comillas es contenido, no una dependencia.
+  expr = expr.replace(/"(?:[^"\\]|\\[\s\S])*"/g, " ");
+
+  // Las referencias calificadas por hoja se extraen y se retiran primero,
+  // para que la parte de celda de `Hoja1!A1` no se vuelva a contar como una
+  // referencia local `A1`.
+  const qualifiedRegex = new RegExp(QUALIFIED_REF_SOURCE, "g");
+  expr = expr.replace(qualifiedRegex, (match) => {
+    const qualified = parseQualifiedRef(match);
+    if (qualified) {
+      if (qualified.cell.includes(":")) {
+        for (const cell of expandRange(qualified.cell)) {
+          refs.add(qualify(qualified.sheet, cell));
+        }
+      } else {
+        refs.add(qualify(qualified.sheet, qualified.cell));
+      }
+    }
+    return " ".repeat(match.length);
+  });
+
+  const localRefs = new Set<string>();
   const rangeRegex = new RegExp(RANGE_REF_REGEX.source, "g");
   let rangeMatch: RegExpExecArray | null;
   while ((rangeMatch = rangeRegex.exec(expr)) !== null) {
@@ -66,7 +100,7 @@ export const extractPrecedents = (formula: string): Set<string> => {
         col <= Math.max(startCol, endCol);
         col++
       ) {
-        refs.add(`${columnIndexToLabel(col)}${row + 1}`);
+        localRefs.add(`${columnIndexToLabel(col)}${row + 1}`);
       }
     }
   }
@@ -74,7 +108,13 @@ export const extractPrecedents = (formula: string): Set<string> => {
   const refRegex = new RegExp(CELL_REF_REGEX.source, "g");
   let refMatch: RegExpExecArray | null;
   while ((refMatch = refRegex.exec(expr)) !== null) {
-    refs.add(refMatch[0].replace(/\$/g, ""));
+    localRefs.add(refMatch[0].replace(/\$/g, ""));
+  }
+
+  // Las referencias locales se califican con la hoja actual, si la hay, para
+  // que compartan espacio de nombres con las calificadas.
+  for (const ref of localRefs) {
+    refs.add(currentSheet === undefined ? ref : qualify(currentSheet, ref));
   }
 
   return refs;
@@ -102,7 +142,10 @@ export const buildGraph = (
     const formula = cells[cellRef]?.formula;
     if (!formula?.startsWith("=")) continue;
 
-    const precedents = extractPrecedents(formula);
+    // La hoja de la celda sale de su propia clave: en un libro de varias
+    // hojas las claves son `Hoja1!A1`, y sus referencias locales pertenecen
+    // a esa misma hoja.
+    const precedents = extractPrecedents(formula, splitRef(cellRef).sheet);
     graph.precedents.set(cellRef, precedents);
 
     precedents.forEach((precedentRef) => {
@@ -134,7 +177,7 @@ export const updateCellInGraph = (
     });
   }
 
-  const newPrecedents = extractPrecedents(newFormula);
+  const newPrecedents = extractPrecedents(newFormula, splitRef(cellRef).sheet);
 
   if (newPrecedents.size > 0) {
     precedents.set(cellRef, newPrecedents);
@@ -230,7 +273,7 @@ export const wouldCreateCycle = (
   cellRef: string,
   newFormula: string,
 ): boolean => {
-  const newPrecedents = extractPrecedents(newFormula);
+  const newPrecedents = extractPrecedents(newFormula, splitRef(cellRef).sheet);
   if (newPrecedents.size === 0) return false;
 
   const visited = new Set<string>();
