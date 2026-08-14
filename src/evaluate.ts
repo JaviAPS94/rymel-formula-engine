@@ -113,6 +113,10 @@ const TOKEN_PATTERN = new RegExp(
     "\\s+",
     '"(?:[^"\\\\]|\\\\.)*"',
     QUALIFIED_REF_SOURCE,
+    // Literal de texto entre comillas simples. Va **después** de la
+    // referencia calificada para que `'Template 1F'!A1` se lea como
+    // referencia y no como el texto `Template 1F` seguido de basura.
+    "'(?:[^'\\\\]|\\\\.)*'",
     "\\$?[A-Za-z]+\\$?\\d+:\\$?[A-Za-z]+\\$?\\d+",
     "\\$?[A-Za-z]+\\$?\\d+",
     "[A-Za-z_][A-Za-z0-9_]*(?=\\()",
@@ -141,6 +145,7 @@ const unescapeString = (literal: string): string =>
   literal
     .slice(1, -1)
     .replace(/\\"/g, '"')
+    .replace(/\\'/g, "'")
     .replace(/\\\\/g, "\\");
 
 const stripAbsoluteMarkers = (ref: string): string =>
@@ -163,7 +168,7 @@ const tokenize = (expression: string): Token[] => {
     cursor += text.length;
 
     if (/^\s+$/.test(text)) continue;
-    if (text.startsWith('"')) {
+    if (text.startsWith('"') || (text.startsWith("'") && text.endsWith("'"))) {
       tokens.push({ type: "string", value: unescapeString(text) });
     } else if (BOOLEAN_LITERALS.has(text.toUpperCase())) {
       tokens.push({

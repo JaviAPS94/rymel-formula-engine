@@ -119,3 +119,25 @@ describe("literales booleanos", () => {
     expect(evaluateFormula("=TRUENO", {})).toBe(FORMULA_ERROR);
   });
 });
+
+describe("compatibilidad de sintaxis con el evaluador anterior", () => {
+  it("admite una hoja cuyo nombre empieza por dígito", () => {
+    // Los subtipos de este sistema se llaman 1F y 3F.
+    expect(evaluateFormula("=1F!A1", { "1F!A1": 5 })).toBe(5);
+  });
+
+  it("no confunde esa hoja con un número", () => {
+    expect(evaluateFormula("=1+2", {})).toBe(3);
+    expect(evaluateFormula("=1.5*2", {})).toBe(3);
+  });
+
+  it("admite literales de texto entre comillas simples", () => {
+    expect(evaluateFormula("='hola'", {})).toBe("hola");
+    expect(evaluateFormula("='a' & 'b'", {})).toBe("ab");
+  });
+
+  it("prefiere la referencia calificada al literal de texto", () => {
+    // `'Template 1F'!A1` es una referencia, no el texto "Template 1F".
+    expect(evaluateFormula("='Template 1F'!A1", { "Template 1F!A1": 11 })).toBe(11);
+  });
+});

@@ -14,8 +14,18 @@
 
 /** Nombre de hoja entre comillas simples, admitiendo `''` como comilla escapada. */
 const QUOTED_SHEET = "'(?:[^']|'')*'";
-/** Nombre de hoja sin comillas: sin espacios, para que no sea ambiguo dónde termina. */
-const BARE_SHEET = "[A-Za-z_][A-Za-z0-9_.]*";
+/**
+ * Nombre de hoja sin comillas: sin espacios, para que no sea ambiguo dónde
+ * termina.
+ *
+ * Admite empezar por dígito. No es un capricho: los subtipos de diseño de
+ * este sistema se llaman `1F` y `3F`, y una hoja con ese nombre produce
+ * referencias como `1F!A1`. El evaluador anterior las acepta —su patrón es
+ * `[A-Za-z0-9]+!`— así que exigir una letra inicial habría roto esas hojas al
+ * conmutar. Las referencias van siempre antes que los números en el
+ * tokenizador, así que `1F!A1` no se confunde con el número 1.
+ */
+const BARE_SHEET = "[A-Za-z0-9_][A-Za-z0-9_.]*";
 
 /**
  * Prefijo opcional de instancia, con dos puntos: `design:Hoja1!A1`.

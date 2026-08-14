@@ -156,7 +156,7 @@ npm test
 Se instala fijado a un tag inmutable:
 
 ```json
-"@rymel/formula-engine": "github:JaviAPS94/rymel-formula-engine#v1.4.0"
+"@rymel/formula-engine": "github:JaviAPS94/rymel-formula-engine#v1.5.0"
 ```
 
 Ningún consumidor apunta a `main`: una publicación no debe cambiarle el
