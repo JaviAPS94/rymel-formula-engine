@@ -257,6 +257,11 @@ const toRPN = (tokens: Token[]): RPNToken[] => {
         break;
       }
       case "rparen": {
+        // Un paréntesis que cierra justo después del que abre es una llamada
+        // sin argumentos, como `PI()`. Sin esta comprobación se contaría un
+        // argumento que nunca se apiló y la evaluación fallaría.
+        const emptyCall = previous?.type === "lparen";
+
         while (stack.length > 0 && stack[stack.length - 1].kind !== "lparen") {
           popOperatorToOutput(stack.pop()!);
         }
@@ -269,8 +274,12 @@ const toRPN = (tokens: Token[]): RPNToken[] => {
           if (!funcMarker || funcMarker.kind !== "func") {
             throw new ParseError("Malformed function call");
           }
-          const argCount = argCounts.pop() ?? 0;
-          output.push({ type: "call", name: funcMarker.value, argCount });
+          const counted = argCounts.pop() ?? 0;
+          output.push({
+            type: "call",
+            name: funcMarker.value,
+            argCount: emptyCall ? 0 : counted,
+          });
         }
         break;
       }

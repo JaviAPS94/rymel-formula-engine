@@ -88,3 +88,17 @@ describe("evaluateFormula", () => {
     expect(evaluateFormula(null, {})).toBe("");
   });
 });
+
+describe("llamadas sin argumentos", () => {
+  it("evalúa PI()", () => {
+    expect(evaluateFormula("=PI()", {})).toBeCloseTo(Math.PI, 12);
+  });
+
+  it("la combina con otras funciones", () => {
+    expect(evaluateFormula("=REDONDEAR(GRADOS(PI()),2)", {})).toBe(180);
+  });
+
+  it("no confunde el paréntesis vacío de agrupación", () => {
+    expect(evaluateFormula("=()", {})).toBe(FORMULA_ERROR);
+  });
+});
