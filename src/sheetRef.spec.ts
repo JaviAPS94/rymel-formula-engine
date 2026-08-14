@@ -113,3 +113,31 @@ describe("evaluación con referencias entre hojas", () => {
     expect(evaluateFormula("=NoExiste!A1", {}, { sheet: "Hoja2" })).toBe(0);
   });
 });
+
+describe("referencias entre instancias", () => {
+  it("reconoce el prefijo de instancia con dos puntos", () => {
+    expect(parseQualifiedRef("design:Hoja1!A1")).toEqual({
+      sheet: "design:Hoja1",
+      cell: "A1",
+    });
+  });
+
+  it("conserva la instancia en la forma canónica", () => {
+    expect(normalizeRef("cost:Hoja2!$b$3")).toBe("cost:Hoja2!B3");
+  });
+
+  it("la extrae como precedente", () => {
+    expect(extractPrecedents("=design:Hoja1!A1 * 2", "Hoja2")).toEqual(
+      new Set(["design:Hoja1!A1"]),
+    );
+  });
+
+  it("la resuelve al evaluar", () => {
+    const values = { "design:Hoja1!A1": 21 };
+    expect(evaluateFormula("=design:Hoja1!A1 * 2", values, { sheet: "Hoja2" })).toBe(42);
+  });
+
+  it("no confunde una hoja normal con una instancia", () => {
+    expect(parseQualifiedRef("Hoja1!A1")).toEqual({ sheet: "Hoja1", cell: "A1" });
+  });
+});

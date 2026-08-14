@@ -1,6 +1,6 @@
 {
   "name": "@rymel/formula-engine",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Motor de fórmulas de hoja de cálculo de Rymel: evaluación determinista, idéntica en navegador y en Node.",
   "license": "UNLICENSED",
   "private": false,

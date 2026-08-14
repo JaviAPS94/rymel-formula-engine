@@ -62,6 +62,9 @@ Los nombres con espacios van entre comillas simples. Referenciar una hoja que
 no existe da error, no cero: una celda vacía vale cero, pero una hoja ausente
 es una fórmula equivocada y conviene que se note.
 
+Se admite además un prefijo de instancia con dos puntos —`design:Hoja1!A1`—,
+que es como el diseñador referencia celdas de otra instancia del mismo diseño.
+
 ## Funciones personalizadas
 
 Las fórmulas de diseño se invocan desde una celda como `=CUBIC(A1, B2)`. El
@@ -153,7 +156,7 @@ npm test
 Se instala fijado a un tag inmutable:
 
 ```json
-"@rymel/formula-engine": "github:JaviAPS94/rymel-formula-engine#v1.3.1"
+"@rymel/formula-engine": "github:JaviAPS94/rymel-formula-engine#v1.4.0"
 ```
 
 Ningún consumidor apunta a `main`: una publicación no debe cambiarle el

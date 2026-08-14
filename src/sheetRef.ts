@@ -17,7 +17,16 @@ const QUOTED_SHEET = "'(?:[^']|'')*'";
 /** Nombre de hoja sin comillas: sin espacios, para que no sea ambiguo dónde termina. */
 const BARE_SHEET = "[A-Za-z_][A-Za-z0-9_.]*";
 
-const SHEET_PREFIX = `(?:${QUOTED_SHEET}|${BARE_SHEET})!`;
+/**
+ * Prefijo opcional de instancia, con dos puntos: `design:Hoja1!A1`.
+ *
+ * El diseñador de project-front reparte un diseño en varias instancias
+ * (diseño y costos) y una hoja puede referenciar celdas de la otra. Sin esta
+ * forma, esas fórmulas no se podrían ni analizar.
+ */
+const INSTANCE_PREFIX = "[A-Za-z0-9_.]+:";
+
+const SHEET_PREFIX = `(?:${INSTANCE_PREFIX})?(?:${QUOTED_SHEET}|${BARE_SHEET})!`;
 const CELL_PART = "\\$?[A-Za-z]+\\$?\\d+";
 
 /** Fuente de la expresión regular de una referencia calificada, celda o rango. */
