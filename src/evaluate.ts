@@ -10,7 +10,7 @@
  * Notation, and a stack-based RPN evaluator.
  */
 
-import { expandRange, isRangeRef } from "./cellRef.js";
+import { expandRangeToGrid, isRangeRef } from "./cellRef.js";
 import { callFunction, type FormulaArg, type FormulaValue } from "./functions.js";
 import type {
   CustomFunctionCall,
@@ -360,12 +360,19 @@ const resolveRef = (
  * Expande un rango a sus celdas, conservando el calificador de hoja cuando
  * lo lleva: `Hoja1!A1:B2` produce `Hoja1!A1`, `Hoja1!B1`, ...
  */
-const expandAnyRange = (range: string): string[] => {
+/**
+ * Expande un rango a sus celdas conservando la forma de tabla, y el
+ * calificador de hoja cuando lo lleva: `Hoja1!A1:B2` produce
+ * `[[Hoja1!A1, Hoja1!B1], [Hoja1!A2, Hoja1!B2]]`.
+ */
+const expandAnyRangeToGrid = (range: string): string[][] => {
   const separator = range.lastIndexOf("!");
-  if (separator === -1) return expandRange(range);
+  if (separator === -1) return expandRangeToGrid(range);
 
   const sheet = range.slice(0, separator);
-  return expandRange(range.slice(separator + 1)).map((ref) => qualify(sheet, ref));
+  return expandRangeToGrid(range.slice(separator + 1)).map((row) =>
+    row.map((ref) => qualify(sheet, ref)),
+  );
 };
 
 const toNumber = (value: FormulaValue): number => {
@@ -454,9 +461,11 @@ const evalRPN = (
         stack.push(resolveRef(token.value, cellValues, context));
         break;
       case "range":
+        // Con forma de tabla: `SUMA` la aplana sin enterarse, pero `BUSCARV`
+        // necesita saber qué celda está en qué columna.
         stack.push(
-          expandAnyRange(token.value).map((ref) =>
-            resolveRef(ref, cellValues, context),
+          expandAnyRangeToGrid(token.value).map((row) =>
+            row.map((ref) => resolveRef(ref, cellValues, context)),
           ),
         );
         break;

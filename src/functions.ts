@@ -6,13 +6,26 @@
  */
 
 export type FormulaValue = number | string;
-export type FormulaArg = FormulaValue | FormulaValue[];
+/** Un rango conserva su forma de tabla: una entrada por fila. */
+export type FormulaRange = FormulaValue[][];
+export type FormulaArg = FormulaValue | FormulaValue[] | FormulaRange;
 
 /** Thrown by a function on invalid input; `evaluate.ts` turns this into `#ERROR`. */
 export class FormulaError extends Error {}
 
+/** Aplana argumentos sueltos y rangos, sea cual sea su forma. */
 const flatten = (args: FormulaArg[]): FormulaValue[] =>
-  args.flatMap((arg) => (Array.isArray(arg) ? arg : [arg]));
+  args.flatMap((arg) =>
+    Array.isArray(arg) ? (arg.flat() as FormulaValue[]) : [arg],
+  );
+
+/** Devuelve un argumento como matriz de filas, si lo es. */
+const asGrid = (arg: FormulaArg | undefined): FormulaRange | null => {
+  if (!Array.isArray(arg)) return null;
+  return arg.every((row) => Array.isArray(row))
+    ? (arg as FormulaRange)
+    : [arg as FormulaValue[]];
+};
 
 const toNumber = (value: FormulaValue): number => {
   if (typeof value === "number") return value;
@@ -131,6 +144,119 @@ const or = (args: FormulaArg[]): number => {
 const isTruthy = (value: FormulaValue): boolean =>
   typeof value === "number" ? value !== 0 : Boolean(value);
 
+/**
+ * `BUSCARV`/`VLOOKUP`: busca un valor en la primera columna de una tabla y
+ * devuelve el de la columna indicada.
+ *
+ * Replica la semántica del diseñador de project-front, incluida la tolerancia
+ * de 0.0001 al comparar números y la búsqueda aproximada sobre datos
+ * ordenados. Una diferencia deliberada: si la celda encontrada contiene
+ * texto, aquí se devuelve el texto; el evaluador anterior devolvía 0, porque
+ * sustituía el resultado dentro de una expresión de JavaScript.
+ */
+const vlookup = (args: FormulaArg[]): FormulaValue => {
+  if (args.length < 3) {
+    throw new FormulaError("BUSCARV/VLOOKUP espera al menos 3 argumentos");
+  }
+
+  const [needle, table, columnArg, exactArg] = args;
+  const grid = asGrid(table);
+  if (grid === null || grid.length === 0) {
+    throw new FormulaError("BUSCARV/VLOOKUP necesita un rango como tabla");
+  }
+
+  const column = toNumber(columnArg as FormulaValue);
+  if (!Number.isInteger(column) || column < 1) {
+    throw new FormulaError("El número de columna debe ser un entero desde 1");
+  }
+
+  const exact =
+    exactArg === undefined
+      ? true
+      : typeof exactArg === "number"
+        ? exactArg !== 0
+        : String(exactArg).toLowerCase() === "true" || exactArg === "1";
+
+  const target = needle as FormulaValue;
+  const matches = (candidate: FormulaValue): boolean =>
+    typeof target === "number" && typeof candidate === "number"
+      ? Math.abs(target - candidate) < 0.0001
+      : String(candidate).toLowerCase() === String(target).toLowerCase();
+
+  const valueAt = (row: FormulaValue[]): FormulaValue => {
+    const found = row[column - 1];
+    if (found === undefined) {
+      throw new FormulaError(`La tabla no tiene ${column} columna(s)`);
+    }
+    return found;
+  };
+
+  if (exact) {
+    for (const row of grid) {
+      if (row.length > 0 && matches(row[0])) return valueAt(row);
+    }
+    throw new FormulaError("BUSCARV/VLOOKUP no encontró el valor");
+  }
+
+  // Aproximada: la última fila cuyo primer valor no supera al buscado.
+  let lastMatch: FormulaValue[] | null = null;
+  for (const row of grid) {
+    const candidate = row[0];
+    const beyond =
+      typeof target === "number" && typeof candidate === "number"
+        ? candidate > target
+        : String(candidate).toLowerCase() > String(target).toLowerCase();
+    if (beyond) break;
+    lastMatch = row;
+  }
+
+  if (lastMatch === null) {
+    throw new FormulaError("BUSCARV/VLOOKUP no encontró el valor");
+  }
+  return valueAt(lastMatch);
+};
+
+/**
+ * `COINCIDIR`/`MATCH`: posición (empezando en 1) de un valor dentro de un
+ * rango. El tipo 0 exige coincidencia exacta; 1 (por omisión) busca el mayor
+ * valor que no supere al buscado, sobre datos ordenados.
+ */
+const match = (args: FormulaArg[]): number => {
+  if (args.length < 2) {
+    throw new FormulaError("COINCIDIR/MATCH espera al menos 2 argumentos");
+  }
+
+  const [needle, range, typeArg] = args;
+  const values = flatten([range]);
+  const target = needle as FormulaValue;
+  const matchType = typeArg === undefined ? 1 : toNumber(typeArg as FormulaValue);
+
+  const equals = (candidate: FormulaValue): boolean =>
+    typeof target === "number" && typeof candidate === "number"
+      ? Math.abs(target - candidate) < 0.0001
+      : String(candidate).toLowerCase() === String(target).toLowerCase();
+
+  if (matchType === 0) {
+    const index = values.findIndex(equals);
+    if (index === -1) throw new FormulaError("COINCIDIR/MATCH no encontró el valor");
+    return index + 1;
+  }
+
+  let last = -1;
+  for (let index = 0; index < values.length; index++) {
+    const candidate = values[index];
+    const beyond =
+      typeof target === "number" && typeof candidate === "number"
+        ? candidate > target
+        : String(candidate).toLowerCase() > String(target).toLowerCase();
+    if (beyond) break;
+    last = index;
+  }
+
+  if (last === -1) throw new FormulaError("COINCIDIR/MATCH no encontró el valor");
+  return last + 1;
+};
+
 export type FormulaFunction = (args: FormulaArg[]) => FormulaValue;
 
 export const FUNCTIONS: Record<string, FormulaFunction> = {
@@ -186,6 +312,12 @@ export const FUNCTIONS: Record<string, FormulaFunction> = {
   RADIANS: unaryMath("RADIANES/RADIANS", (value) => (Math.PI / 180) * value),
   GRADOS: unaryMath("GRADOS/DEGREES", (value) => (180 / Math.PI) * value),
   DEGREES: unaryMath("GRADOS/DEGREES", (value) => (180 / Math.PI) * value),
+
+  // Búsqueda en tablas
+  BUSCARV: vlookup,
+  VLOOKUP: vlookup,
+  COINCIDIR: match,
+  MATCH: match,
 
   // Lógica
   Y: and,

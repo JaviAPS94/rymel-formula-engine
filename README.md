@@ -130,7 +130,15 @@ unaria, referencias `A1` y `$A$1`, y rangos `A1:B5`.
 error de fórmula en vez de `NaN` e `Infinity`: un cálculo que salió mal no
 debe seguir viajando por la hoja disfrazado de número.
 
-Todavía **no** implementa `BUSCARV`, que project-front sí ofrece.
+Búsqueda en tablas: `BUSCARV/VLOOKUP(valor, tabla, columna, exacto)` y
+`COINCIDIR/MATCH(valor, rango, tipo)`. Los rangos conservan su forma de tabla,
+de modo que `A1:B3` es `[[A1,B1],[A2,B2],[A3,B3]]`; las funciones de agregado
+lo aplanan sin enterarse.
+
+`BUSCARV` replica la semántica del diseñador de project-front, incluida la
+tolerancia de 0.0001 al comparar números y la búsqueda aproximada sobre datos
+ordenados, con una diferencia deliberada: si la celda encontrada contiene
+texto se devuelve el texto, no `0`.
 
 ## Desarrollo
 
@@ -145,7 +153,7 @@ npm test
 Se instala fijado a un tag inmutable:
 
 ```json
-"@rymel/formula-engine": "github:JaviAPS94/rymel-formula-engine#v1.2.1"
+"@rymel/formula-engine": "github:JaviAPS94/rymel-formula-engine#v1.3.0"
 ```
 
 Ningún consumidor apunta a `main`: una publicación no debe cambiarle el

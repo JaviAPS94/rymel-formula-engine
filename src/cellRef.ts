@@ -58,6 +58,41 @@ export const isRangeRef = (token: string): boolean =>
   RANGE_PATTERN.test(token.trim());
 
 /**
+ * Expande un rango conservando su forma de tabla: una fila por cada fila del
+ * rango. `A1:B3` produce `[[A1,B1],[A2,B2],[A3,B3]]`.
+ *
+ * `BUSCARV` y `COINCIDIR` necesitan saber qué celda está en qué columna, y
+ * eso se pierde al aplanar.
+ */
+export const expandRangeToGrid = (range: string): string[][] => {
+  const match = RANGE_PATTERN.exec(range.trim());
+  if (!match) return [];
+
+  const startCol = columnLabelToIndex(match[1]);
+  const startRow = Number.parseInt(match[2], 10) - 1;
+  const endCol = columnLabelToIndex(match[3]);
+  const endRow = Number.parseInt(match[4], 10) - 1;
+
+  const rows: string[][] = [];
+  for (
+    let row = Math.min(startRow, endRow);
+    row <= Math.max(startRow, endRow);
+    row++
+  ) {
+    const cells: string[] = [];
+    for (
+      let col = Math.min(startCol, endCol);
+      col <= Math.max(startCol, endCol);
+      col++
+    ) {
+      cells.push(positionToCellRef({ row, col }));
+    }
+    rows.push(cells);
+  }
+  return rows;
+};
+
+/**
  * Expands a range reference (`A1:B3`) into its individual cell references,
  * in row-major order: `A1, B1, A2, B2, A3, B3`.
  *

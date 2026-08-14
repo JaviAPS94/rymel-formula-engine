@@ -113,3 +113,51 @@ describe("paridad con el evaluador de project-front", () => {
     expect(() => callFunction("LN", [0])).toThrow(FormulaError);
   });
 });
+
+describe("búsqueda en tablas", () => {
+  // Tabla: [código, valor, etiqueta]
+  const tabla = [
+    [10, 100, "diez"],
+    [20, 200, "veinte"],
+    [30, 300, "treinta"],
+  ];
+
+  it("BUSCARV encuentra por coincidencia exacta", () => {
+    expect(callFunction("BUSCARV", [20, tabla, 2, "TRUE"])).toBe(200);
+    expect(callFunction("VLOOKUP", [30, tabla, 3, "TRUE"])).toBe("treinta");
+  });
+
+  it("BUSCARV usa coincidencia exacta por omisión", () => {
+    expect(callFunction("BUSCARV", [10, tabla, 2])).toBe(100);
+  });
+
+  it("BUSCARV falla si no encuentra el valor exacto", () => {
+    expect(() => callFunction("BUSCARV", [25, tabla, 2])).toThrow(FormulaError);
+  });
+
+  it("BUSCARV aproximada toma la última fila que no supera al buscado", () => {
+    expect(callFunction("BUSCARV", [25, tabla, 2, "false"])).toBe(200);
+    expect(callFunction("BUSCARV", [35, tabla, 2, "false"])).toBe(300);
+  });
+
+  it("BUSCARV tolera 0.0001 al comparar números, como el evaluador anterior", () => {
+    expect(callFunction("BUSCARV", [20.00005, tabla, 2])).toBe(200);
+  });
+
+  it("BUSCARV rechaza una columna fuera de la tabla", () => {
+    expect(() => callFunction("BUSCARV", [10, tabla, 9])).toThrow(FormulaError);
+  });
+
+  it("COINCIDIR devuelve la posición empezando en 1", () => {
+    expect(callFunction("COINCIDIR", [200, [100, 200, 300], 0])).toBe(2);
+    expect(callFunction("MATCH", [100, [100, 200, 300], 0])).toBe(1);
+  });
+
+  it("COINCIDIR aproximada toma la última posición que no supera", () => {
+    expect(callFunction("COINCIDIR", [250, [100, 200, 300]])).toBe(2);
+  });
+
+  it("un rango sigue aplanándose para SUMA y PROMEDIO", () => {
+    expect(callFunction("SUMA", [tabla.map((fila) => [fila[0], fila[1]])])).toBe(660);
+  });
+});
