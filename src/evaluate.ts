@@ -116,6 +116,10 @@ const TOKEN_PATTERN = new RegExp(
     "\\$?[A-Za-z]+\\$?\\d+:\\$?[A-Za-z]+\\$?\\d+",
     "\\$?[A-Za-z]+\\$?\\d+",
     "[A-Za-z_][A-Za-z0-9_]*(?=\\()",
+    // Literales booleanos sueltos: los usa el ejemplo de la ayuda del
+    // diseñador, `=BUSCARV(A1, B1:E10, 3, TRUE)`. Sin ellos, esa fórmula
+    // tal como está documentada no se puede analizar.
+    "(?:TRUE|FALSE|VERDADERO|FALSO)\\b",
     "\\d+(?:\\.\\d+)?",
     "<=",
     ">=",
@@ -124,6 +128,14 @@ const TOKEN_PATTERN = new RegExp(
   ].join("|"),
   "g",
 );
+
+/** `TRUE`/`FALSE` y sus nombres en español, como 1 y 0. */
+const BOOLEAN_LITERALS = new Map<string, number>([
+  ["TRUE", 1],
+  ["VERDADERO", 1],
+  ["FALSE", 0],
+  ["FALSO", 0],
+]);
 
 const unescapeString = (literal: string): string =>
   literal
@@ -153,6 +165,11 @@ const tokenize = (expression: string): Token[] => {
     if (/^\s+$/.test(text)) continue;
     if (text.startsWith('"')) {
       tokens.push({ type: "string", value: unescapeString(text) });
+    } else if (BOOLEAN_LITERALS.has(text.toUpperCase())) {
+      tokens.push({
+        type: "number",
+        value: BOOLEAN_LITERALS.get(text.toUpperCase())!,
+      });
     } else if (isQualifiedRef(text)) {
       const qualified = parseQualifiedRef(text)!;
       const canonical = qualify(qualified.sheet, qualified.cell);

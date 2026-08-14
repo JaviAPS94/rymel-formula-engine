@@ -102,3 +102,20 @@ describe("llamadas sin argumentos", () => {
     expect(evaluateFormula("=()", {})).toBe(FORMULA_ERROR);
   });
 });
+
+describe("literales booleanos", () => {
+  it("acepta TRUE y FALSE, como el ejemplo de la ayuda del diseñador", () => {
+    const cells = { F1: 10, G1: 100, F2: 20, G2: 200, F3: 30, G3: 300 };
+    expect(evaluateFormula("=BUSCARV(20, F1:G3, 2, TRUE)", cells)).toBe(200);
+    expect(evaluateFormula("=BUSCARV(25, F1:G3, 2, FALSE)", cells)).toBe(200);
+  });
+
+  it("acepta VERDADERO y FALSO", () => {
+    expect(evaluateFormula("=SI(VERDADERO, 1, 2)", {})).toBe(1);
+    expect(evaluateFormula("=SI(FALSO, 1, 2)", {})).toBe(2);
+  });
+
+  it("no confunde un identificador desconocido con un booleano", () => {
+    expect(evaluateFormula("=TRUENO", {})).toBe(FORMULA_ERROR);
+  });
+});
