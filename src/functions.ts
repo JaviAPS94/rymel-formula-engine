@@ -79,6 +79,58 @@ const right = (args: FormulaArg[]): string => {
   return n <= 0 ? "" : toText(text).slice(-n);
 };
 
+/**
+ * Funciones matemáticas de un solo argumento.
+ *
+ * El conjunto y sus nombres replican los que ya acepta el diseñador de
+ * project-front, que los traduce a `Math.*`. Sin ellos, adoptar este motor
+ * allí convertiría en error cualquier hoja que use `=RAIZ(A1)` o `=ABS(...)`.
+ *
+ * Un resultado no finito se trata como error, igual que la división por cero:
+ * `NaN` o `Infinity` en una celda no es un dato, es un cálculo que salió mal.
+ */
+const requireFinite = (value: number, name: string): number => {
+  if (!Number.isFinite(value)) {
+    throw new FormulaError(`${name} no produjo un número finito`);
+  }
+  return value;
+};
+
+const unaryMath =
+  (name: string, fn: (value: number) => number): FormulaFunction =>
+  (args: FormulaArg[]) => {
+    requireArgs(args, 1, name);
+    return requireFinite(fn(toNumber(flatten(args)[0])), name);
+  };
+
+const power = (args: FormulaArg[]): number => {
+  requireArgs(args, 2, "POTENCIA/POWER");
+  const [base, exponent] = flatten(args).map(toNumber);
+  return requireFinite(base ** exponent, "POTENCIA/POWER");
+};
+
+const pi = (args: FormulaArg[]): number => {
+  requireArgs(args, 0, "PI");
+  return Math.PI;
+};
+
+/** `Y`/`AND`: 1 si todos los argumentos son ciertos, 0 si alguno no lo es. */
+const and = (args: FormulaArg[]): number => {
+  const values = flatten(args);
+  if (values.length === 0) throw new FormulaError("Y/AND necesita argumentos");
+  return values.every(isTruthy) ? 1 : 0;
+};
+
+/** `O`/`OR`: 1 si algún argumento es cierto. */
+const or = (args: FormulaArg[]): number => {
+  const values = flatten(args);
+  if (values.length === 0) throw new FormulaError("O/OR necesita argumentos");
+  return values.some(isTruthy) ? 1 : 0;
+};
+
+const isTruthy = (value: FormulaValue): boolean =>
+  typeof value === "number" ? value !== 0 : Boolean(value);
+
 export type FormulaFunction = (args: FormulaArg[]) => FormulaValue;
 
 export const FUNCTIONS: Record<string, FormulaFunction> = {
@@ -98,6 +150,48 @@ export const FUNCTIONS: Record<string, FormulaFunction> = {
   LEFT: left,
   DERECHA: right,
   RIGHT: right,
+
+  // Trigonometría, en radianes.
+  SENO: unaryMath("SENO/SIN", Math.sin),
+  SIN: unaryMath("SENO/SIN", Math.sin),
+  COSENO: unaryMath("COSENO/COS", Math.cos),
+  COS: unaryMath("COSENO/COS", Math.cos),
+  TANGENTE: unaryMath("TANGENTE/TAN", Math.tan),
+  TAN: unaryMath("TANGENTE/TAN", Math.tan),
+  ASENO: unaryMath("ASENO/ASIN", Math.asin),
+  ASIN: unaryMath("ASENO/ASIN", Math.asin),
+  ACOSENO: unaryMath("ACOSENO/ACOS", Math.acos),
+  ACOS: unaryMath("ACOSENO/ACOS", Math.acos),
+  ATAN: unaryMath("ATAN", Math.atan),
+
+  // Logaritmos: LOG es en base 10, como en una hoja de cálculo.
+  LOGARITMO: unaryMath("LOGARITMO/LOG", Math.log10),
+  LOG: unaryMath("LOGARITMO/LOG", Math.log10),
+  LN: unaryMath("LN", Math.log),
+
+  // Aritmética
+  RAIZ: unaryMath("RAIZ/SQRT", Math.sqrt),
+  SQRT: unaryMath("RAIZ/SQRT", Math.sqrt),
+  ABS: unaryMath("ABS", Math.abs),
+  POTENCIA: power,
+  POWER: power,
+  TECHO: unaryMath("TECHO/CEILING", Math.ceil),
+  CEILING: unaryMath("TECHO/CEILING", Math.ceil),
+  PISO: unaryMath("PISO/FLOOR", Math.floor),
+  FLOOR: unaryMath("PISO/FLOOR", Math.floor),
+  PI: pi,
+
+  // Conversión de ángulos
+  RADIANES: unaryMath("RADIANES/RADIANS", (value) => (Math.PI / 180) * value),
+  RADIANS: unaryMath("RADIANES/RADIANS", (value) => (Math.PI / 180) * value),
+  GRADOS: unaryMath("GRADOS/DEGREES", (value) => (180 / Math.PI) * value),
+  DEGREES: unaryMath("GRADOS/DEGREES", (value) => (180 / Math.PI) * value),
+
+  // Lógica
+  Y: and,
+  AND: and,
+  O: or,
+  OR: or,
 };
 
 export const isKnownFunction = (name: string): boolean =>

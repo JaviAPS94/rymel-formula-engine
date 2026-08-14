@@ -117,8 +117,20 @@ y a su alias en inglés:
 | `IZQUIERDA` | `LEFT` | primeros N caracteres |
 | `DERECHA` | `RIGHT` | últimos N caracteres |
 
+Y las matemáticas que ya aceptaba el diseñador de project-front, con sus dos
+nombres: `SENO/SIN`, `COSENO/COS`, `TANGENTE/TAN`, `ASENO/ASIN`,
+`ACOSENO/ACOS`, `ATAN`, `LOGARITMO/LOG` (base 10), `LN`, `RAIZ/SQRT`, `ABS`,
+`POTENCIA/POWER`, `TECHO/CEILING`, `PISO/FLOOR`, `PI()`, `RADIANES/RADIANS`,
+`GRADOS/DEGREES`, `Y/AND` y `O/OR`.
+
 Operadores: `+ - * / ^ &`, comparadores `= <> < > <= >=`, paréntesis, negación
 unaria, referencias `A1` y `$A$1`, y rangos `A1:B5`.
+
+**Un resultado no finito es un error, no un valor.** `RAIZ(-1)` y `1/0` dan
+error de fórmula en vez de `NaN` e `Infinity`: un cálculo que salió mal no
+debe seguir viajando por la hoja disfrazado de número.
+
+Todavía **no** implementa `BUSCARV`, que project-front sí ofrece.
 
 ## Desarrollo
 
@@ -133,7 +145,7 @@ npm test
 Se instala fijado a un tag inmutable:
 
 ```json
-"@rymel/formula-engine": "github:JaviAPS94/rymel-formula-engine#v1.1.0"
+"@rymel/formula-engine": "github:JaviAPS94/rymel-formula-engine#v1.2.0"
 ```
 
 Ningún consumidor apunta a `main`: una publicación no debe cambiarle el
