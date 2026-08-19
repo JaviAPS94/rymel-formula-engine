@@ -17,6 +17,7 @@ import {
   getRecalcOrder,
   type DepGraph,
 } from "./depGraph.js";
+import { isFormulaContent } from "./graphicDirective.js";
 import {
   evaluateCell,
   FORMULA_CIRCULAR,
@@ -71,7 +72,10 @@ const literalValue = (cell: SheetCell | undefined): FormulaValue => {
   const raw = cell?.formula;
   if (raw === undefined || raw === null) return "";
   const trimmed = String(raw).trim();
-  if (trimmed === "" || trimmed.startsWith("=")) return "";
+  if (trimmed === "") return "";
+  // La celda de gráfico no es una fórmula: su literal es su propia directiva.
+  if (isFormulaContent(trimmed)) return "";
+  if (trimmed.startsWith("=")) return trimmed.slice(1).trimStart();
   const num = Number(trimmed);
   return Number.isNaN(num) ? trimmed : num;
 };
@@ -97,7 +101,7 @@ export const evaluateSheet = async (
 
   const values: CellValueMap = { ...options.initialValues };
   for (const ref of Object.keys(cells)) {
-    if (!cells[ref]?.formula?.startsWith("=")) {
+    if (!isFormulaContent(cells[ref]?.formula)) {
       values[ref] = literalValue(cells[ref]);
     }
   }

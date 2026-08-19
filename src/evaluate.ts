@@ -25,6 +25,7 @@ import {
   qualify,
   splitRef,
 } from "./sheetRef.js";
+import { graphicDirectiveValue } from "./graphicDirective.js";
 
 export type CellValueMap = Record<string, FormulaValue | undefined>;
 
@@ -128,7 +129,12 @@ const TOKEN_PATTERN = new RegExp(
     "<=",
     ">=",
     "<>",
-    "[+\\-*/^&=<>(),]",
+    // El `;` separa argumentos igual que la `,`: es lo que produce Excel en la
+    // configuración regional en la que se escriben las plantillas, y por tanto
+    // lo que traen las fórmulas reales. Va después del literal de texto en
+    // este mismo patrón, así que un `;` dentro de unas comillas sigue siendo
+    // contenido.
+    "[+\\-*/^&=<>(),;]",
   ].join("|"),
   "g",
 );
@@ -176,7 +182,12 @@ const tokenize = (expression: string): Token[] => {
         value: BOOLEAN_LITERALS.get(text.toUpperCase())!,
       });
     } else if (isQualifiedRef(text)) {
-      const qualified = parseQualifiedRef(text)!;
+      const qualified = parseQualifiedRef(text);
+      if (!qualified) {
+        throw new ParseError(
+          `Range endpoints name different sheets: "${text}"`,
+        );
+      }
       const canonical = qualify(qualified.sheet, qualified.cell);
       tokens.push({
         type: qualified.cell.includes(":") ? "range" : "ref",
@@ -194,7 +205,7 @@ const tokenize = (expression: string): Token[] => {
       tokens.push({ type: "lparen" });
     } else if (text === ")") {
       tokens.push({ type: "rparen" });
-    } else if (text === ",") {
+    } else if (text === "," || text === ";") {
       tokens.push({ type: "comma" });
     } else {
       tokens.push({ type: "op", value: text });
@@ -635,6 +646,60 @@ export const evaluateExpressionDetailed = (
   }
 };
 
+/** Una invocación de función encontrada al analizar una expresión. */
+export interface AnalyzedCall {
+  /** Nombre en mayúsculas, tal como lo resuelve el evaluador. */
+  name: string;
+  /** Cuántos argumentos recibe en esta invocación. */
+  argCount: number;
+}
+
+/** Lo que el análisis estático puede saber de una expresión sin evaluarla. */
+export interface AnalyzedExpression {
+  /** Motivo del fallo de análisis; `undefined` si la expresión es analizable. */
+  error?: string;
+  /** Invocaciones de función que contiene, incluidas las anidadas. */
+  calls: AnalyzedCall[];
+  /** Referencias y rangos que menciona, en forma canónica. */
+  refs: string[];
+}
+
+/**
+ * Analiza una expresión sin evaluarla: informa si es sintácticamente válida y
+ * qué funciones y referencias contiene.
+ *
+ * Existe porque validar evaluando obliga a resolver las funciones
+ * personalizadas, y resolverlas es una petición de red. El editor de
+ * plantillas necesita saber si una fórmula está bien escrita mientras se
+ * escribe, y el servidor necesita saberlo sin salir a la red.
+ */
+export const analyzeExpression = (expression: string): AnalyzedExpression => {
+  try {
+    const tokens = tokenize(expression);
+    if (tokens.length === 0) throw new ParseError("Empty expression");
+
+    const rpn = toRPN(tokens);
+    const calls: AnalyzedCall[] = [];
+    const refs: string[] = [];
+
+    for (const token of rpn) {
+      if (token.type === "call") {
+        calls.push({ name: token.name, argCount: token.argCount });
+      } else if (token.type === "ref" || token.type === "range") {
+        refs.push(token.value);
+      }
+    }
+
+    return { calls, refs };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : String(error),
+      calls: [],
+      refs: [],
+    };
+  }
+};
+
 /**
  * Evaluates a full cell entry: a formula (`=...`), a numeric literal, or
  * plain text. This is the main entry point used by the grid.
@@ -660,6 +725,14 @@ export const evaluateCell = (
   if (formula === undefined || formula === null) return { status: "ok", value: "" };
   const trimmed = String(formula).trim();
   if (trimmed === "") return { status: "ok", value: "" };
+
+  // Una celda de gráfico no se calcula: su valor es su propia directiva, sin
+  // el `=` que las plantillas antiguas le anteponen. Va antes que todo lo
+  // demás porque `=DRAW:...` empieza por `=` y, sin esto, se leería como
+  // fórmula.
+  const directive = graphicDirectiveValue(trimmed);
+  if (directive !== undefined) return { status: "ok", value: directive };
+
   if (!trimmed.startsWith("=")) {
     const num = Number(trimmed);
     return { status: "ok", value: Number.isNaN(num) ? trimmed : num };

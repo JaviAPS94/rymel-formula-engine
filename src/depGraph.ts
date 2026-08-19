@@ -13,6 +13,7 @@
  */
 
 import { expandRange } from "./cellRef.js";
+import { isFormulaContent } from "./graphicDirective.js";
 import {
   parseQualifiedRef,
   QUALIFIED_REF_SOURCE,
@@ -51,13 +52,17 @@ const columnIndexToLabel = (col: number): string => {
  * `A1`, with `$` stripped.
  */
 export const extractPrecedents = (
-  formula: string,
+  formula: string | undefined | null,
   currentSheet?: string,
 ): Set<string> => {
-  if (!formula || !formula.startsWith("=")) return new Set();
+  // Una celda de gráfico no depende de nada: las referencias que su directiva
+  // menciona son argumentos del dibujo. Leerlas como precedentes llenaría el
+  // grafo de aristas falsas —los tramos `D56:D59` parecen rangos— y arrastraría
+  // la celda a recálculos que no le corresponden.
+  if (!isFormulaContent(formula)) return new Set();
 
   const refs = new Set<string>();
-  let expr = formula.slice(1);
+  let expr = String(formula).trim().slice(1);
 
   // Los literales de texto se retiran antes de buscar referencias: lo que
   // hay dentro de comillas es contenido, no una dependencia.
@@ -140,7 +145,7 @@ export const buildGraph = (
 
   for (const cellRef of Object.keys(cells)) {
     const formula = cells[cellRef]?.formula;
-    if (!formula?.startsWith("=")) continue;
+    if (!isFormulaContent(formula)) continue;
 
     // La hoja de la celda sale de su propia clave: en un libro de varias
     // hojas las claves son `Hoja1!A1`, y sus referencias locales pertenecen

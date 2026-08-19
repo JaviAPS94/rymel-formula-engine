@@ -129,6 +129,12 @@ nombres: `SENO/SIN`, `COSENO/COS`, `TANGENTE/TAN`, `ASENO/ASIN`,
 Operadores: `+ - * / ^ &`, comparadores `= <> < > <= >=`, paréntesis, negación
 unaria, referencias `A1` y `$A$1`, y rangos `A1:B5`.
 
+Los argumentos se separan con `,` **o con `;`**, indistintamente y hasta
+mezclados en la misma fórmula. El `;` es lo que produce Excel en la
+configuración regional en la que se escriben las plantillas, así que no
+admitirlo significaba no poder leer las fórmulas reales. Un `;` dentro de unas
+comillas sigue siendo contenido.
+
 **Un resultado no finito es un error, no un valor.** `RAIZ(-1)` y `1/0` dan
 error de fórmula en vez de `NaN` e `Infinity`: un cálculo que salió mal no
 debe seguir viajando por la hoja disfrazado de número.
@@ -142,6 +148,43 @@ lo aplanan sin enterarse.
 tolerancia de 0.0001 al comparar números y la búsqueda aproximada sobre datos
 ordenados, con una diferencia deliberada: si la celda encontrada contiene
 texto se devuelve el texto, no `0`.
+
+> **Aviso: el cuarto argumento está invertido respecto de Excel.** Aquí `TRUE`
+> significa búsqueda **exacta** y `FALSE`, aproximada; en Excel es al revés.
+> No es una decisión de este paquete: es la semántica del evaluador anterior de
+> project-front, que se replicó tal cual para no cambiar en silencio el
+> resultado de los diseños ya guardados. Alinearlo con Excel cambiaría números
+> ya calculados, así que es una decisión con verificación en sombra por delante,
+> no un arreglo.
+
+## Celdas de gráfico
+
+Una celda cuyo contenido empieza por `DRAW:` —con `=` delante o sin él— no es
+una fórmula: es una directiva que el diseñador interpreta para dibujar dentro
+de la celda. El motor la reconoce y la deja pasar: devuelve su texto sin el
+`=`, y **no le registra precedentes**.
+
+Las dos cosas importan. Evaluarla daba `#ERROR`, y como el renderizador busca
+la directiva en el valor calculado, el dibujo desaparecía en cuanto la hoja se
+recalculaba. Y leer sus tramos `D56:D59` como si fueran rangos llenaba el grafo
+de dependencias de aristas que no existen.
+
+## Análisis estático
+
+`analyzeSheet(cells, { customFunctions })` recorre un libro y devuelve un
+diagnóstico por celda **sin evaluar nada y sin tocar el puerto**: sintaxis
+inválida, hojas inexistentes, funciones desconocidas, aridad incorrecta y
+ciclos.
+
+```ts
+const problemas = analyzeSheet(cells, { customFunctions });
+// [{ cell: "Resumen!C6", code: "unknown-sheet", message: 'La hoja "Tablas2" no existe…' }]
+```
+
+Es síncrono a propósito. Validar evaluando obliga a resolver las funciones
+personalizadas, y resolverlas es una petición de red: sirve para calcular, no
+para decirle a quien escribe una plantilla que se equivocó mientras teclea, ni
+para que el servidor valide lo que recibe.
 
 ## Desarrollo
 

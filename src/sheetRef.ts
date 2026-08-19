@@ -39,10 +39,28 @@ const INSTANCE_PREFIX = "[A-Za-z0-9_.]+:";
 const SHEET_PREFIX = `(?:${INSTANCE_PREFIX})?(?:${QUOTED_SHEET}|${BARE_SHEET})!`;
 const CELL_PART = "\\$?[A-Za-z]+\\$?\\d+";
 
-/** Fuente de la expresión regular de una referencia calificada, celda o rango. */
-export const QUALIFIED_REF_SOURCE = `${SHEET_PREFIX}${CELL_PART}(?::${CELL_PART})?`;
+/**
+ * Fuente de la expresión regular de una referencia calificada, celda o rango.
+ *
+ * El extremo final del rango admite su propio calificador de hoja
+ * —`Tablas!B45:Tablas!C156`— además de la forma con prefijo único
+ * —`Tablas!B45:C156`—. No es una comodidad: es como Excel exporta el rango y
+ * como están escritas las plantillas reales. Sin admitirlo, el token se parte
+ * en dos referencias sueltas y el rango deja de existir: la fórmula da error
+ * y, peor, el grafo de dependencias registra solo los dos extremos, de modo
+ * que un cambio dentro del rango no dispara ningún recálculo.
+ */
+export const QUALIFIED_REF_SOURCE = `${SHEET_PREFIX}${CELL_PART}(?::(?:${SHEET_PREFIX})?${CELL_PART})?`;
 
 const QUALIFIED_REF_PATTERN = new RegExp(`^${QUALIFIED_REF_SOURCE}$`);
+
+/**
+ * El mismo patrón, con las cuatro partes capturadas: prefijo de hoja, celda
+ * inicial, prefijo de hoja del extremo final (opcional) y celda final.
+ */
+const QUALIFIED_REF_PARTS = new RegExp(
+  `^(${SHEET_PREFIX})(${CELL_PART})(?::(${SHEET_PREFIX})?(${CELL_PART}))?$`,
+);
 
 export interface QualifiedRef {
   /** Nombre de la hoja, ya sin comillas. */
@@ -58,20 +76,47 @@ export const isQualifiedRef = (token: string): boolean =>
 const unquoteSheetName = (name: string): string =>
   name.startsWith("'") ? name.slice(1, -1).replace(/''/g, "'") : name;
 
+const normalizeCellPart = (cell: string): string =>
+  cell.replace(/\$/g, "").toUpperCase();
+
+/** Nombre de hoja a partir del prefijo capturado, que incluye el `!` final. */
+const sheetFromPrefix = (prefix: string): string =>
+  unquoteSheetName(prefix.slice(0, -1));
+
 /**
  * Separa una referencia calificada en hoja y celda. Devuelve `null` si el
- * token no lleva calificador de hoja.
+ * token no lleva calificador de hoja, y también si es un rango cuyos dos
+ * extremos califican hojas distintas: `Tablas!B2:Resumen!B9` no designa
+ * ninguna región, así que no hay nada que devolver.
  */
 export const parseQualifiedRef = (token: string): QualifiedRef | null => {
-  const trimmed = token.trim();
-  if (!QUALIFIED_REF_PATTERN.test(trimmed)) return null;
+  const parts = QUALIFIED_REF_PARTS.exec(token.trim());
+  if (!parts) return null;
 
-  const separator = trimmed.lastIndexOf("!");
+  const [, sheetPrefix, startCell, endSheetPrefix, endCell] = parts;
+  const sheet = sheetFromPrefix(sheetPrefix);
+
+  if (endCell === undefined) {
+    return { sheet, cell: normalizeCellPart(startCell) };
+  }
+
+  if (endSheetPrefix !== undefined && sheetFromPrefix(endSheetPrefix) !== sheet) {
+    return null;
+  }
+
   return {
-    sheet: unquoteSheetName(trimmed.slice(0, separator)),
-    cell: trimmed.slice(separator + 1).replace(/\$/g, "").toUpperCase(),
+    sheet,
+    cell: `${normalizeCellPart(startCell)}:${normalizeCellPart(endCell)}`,
   };
 };
+
+/**
+ * `true` si el token tiene forma de referencia calificada pero sus extremos
+ * nombran hojas distintas. El tokenizador lo necesita para dar un error
+ * explicativo en vez de tratar el token como cualquier otra cosa.
+ */
+export const isCrossSheetRange = (token: string): boolean =>
+  QUALIFIED_REF_PATTERN.test(token.trim()) && parseQualifiedRef(token) === null;
 
 /** Construye la forma canónica `NombreHoja!A1`. */
 export const qualify = (sheet: string, cell: string): string =>
